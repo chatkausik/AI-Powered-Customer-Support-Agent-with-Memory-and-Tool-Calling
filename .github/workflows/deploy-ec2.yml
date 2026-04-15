@@ -40,10 +40,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Inject .env from secret (optional)
-        if: ${{ vars.INJECT_ENV_FILE == 'true' }}
+      - name: Inject .env from secret
         run: |
-          printf "%s" "${{ secrets.EC2_ENV_FILE }}" > .env
+          if [ -n "${{ secrets.EC2_ENV_FILE }}" ]; then
+            printf "%s" "${{ secrets.EC2_ENV_FILE }}" > .env
+            echo ".env injected from secret ($(wc -l < .env) lines)"
+          else
+            echo "WARNING: EC2_ENV_FILE secret is empty or not set — .env will not be present on server"
+          fi
 
       - name: Configure SSH key
         run: |
