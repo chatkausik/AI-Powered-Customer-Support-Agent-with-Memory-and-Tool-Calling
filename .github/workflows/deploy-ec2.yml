@@ -1,0 +1,90 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies (including dev)
+        run: uv sync --frozen --dev
+
+      - name: Run tests
+        run: uv run pytest -q
+
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Inject .env from secret (optional)
+        if: vars.INJECT_ENV_FILE == 'true'
+        run: echo "${{ secrets.EC2_ENV_FILE }}" > .env
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p ${{ secrets.EC2_PORT || '22' }} ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Package release
+        run: |
+          tar --exclude='.git' \
+              --exclude='.venv' \
+              --exclude='data' \
+              --exclude='__pycache__' \
+              --exclude='*.pyc' \
+              --exclude='.env' \
+              -czf release.tar.gz .
+
+      - name: Upload release to EC2
+        run: |
+          scp -i ~/.ssh/deploy_key \
+              -P ${{ secrets.EC2_PORT || '22' }} \
+              release.tar.gz \
+              ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/tmp/release.tar.gz
+
+      - name: Extract and restart on EC2
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              -p ${{ secrets.EC2_PORT || '22' }} \
+              ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'ENDSSH'
+            APP_DIR="${{ secrets.EC2_APP_DIR || '/opt/customer_support_agent' }}"
+            mkdir -p "$APP_DIR"
+            tar -xzf /tmp/release.tar.gz -C "$APP_DIR"
+            rm /tmp/release.tar.gz
+            cd "$APP_DIR"
+            docker compose up -d --build --remove-orphans
+          ENDSSH
+
+      - name: Health check
+        run: |
+          sleep 15
+          ssh -i ~/.ssh/deploy_key \
+              -p ${{ secrets.EC2_PORT || '22' }} \
+              ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+              "curl -fsS http://127.0.0.1:8000/health"
