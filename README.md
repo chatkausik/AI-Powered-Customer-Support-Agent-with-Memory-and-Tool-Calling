@@ -9,7 +9,7 @@ An intelligent copilot that helps customer support agents write better replies �
 - **Auto-generates draft replies** for support tickets by pulling together customer history, relevant knowledge-base articles, and live account data from tools.
 - **Remembers resolutions** — when an agent accepts a draft, the interaction is stored in Mem0 so future tickets for the same customer or company benefit from past context.
 - **Searches a knowledge base** of markdown/text files using semantic search (Google Gemini embeddings by default).
-- **Calls live tools** during draft generation to check subscription plan, SLA tier, and open ticket load.
+- **Calls live tools** during draft generation to check subscription plan, SLA tier, open ticket load, and customer sentiment.
 - **Streamlit dashboard** lets agents create tickets, trigger/edit drafts, probe customer memory, and accept or discard responses.
 
 ---
@@ -34,7 +34,7 @@ FastAPI Backend (main.py)
                 ├── Mem0 + ChromaDB  → customer memory (per email + per company)
                 ├── ChromaDB RAG     → knowledge base semantic search
                 └── LangChain Agent (Groq LLM)
-                        └── Tools: lookup_customer_plan, lookup_open_ticket_load
+                        └── Tools: lookup_customer_plan, lookup_open_ticket_load, analyze_ticket_sentiment
 ```
 
 **Data stores**
@@ -132,8 +132,9 @@ The dashboard container automatically points to the API container via Docker's i
 ## Running tests
 
 ```bash
-uv run pytest                          # all tests
-uv run pytest tests/test_simple.py -v  # single file, verbose
+uv run pytest              # all tests (34 tests across 6 files)
+uv run pytest -v           # verbose output
+uv run pytest --cov        # with coverage report (≥50% enforced)
 ```
 
 ---
@@ -158,7 +159,10 @@ uv run pytest tests/test_simple.py -v  # single file, verbose
 ├── customer_support_agent/
 │   ├── api/                  # FastAPI routers + app factory
 │   ├── core/                 # Settings (pydantic-settings)
-│   ├── integrations/         # Mem0, ChromaDB, LangChain tools
+│   ├── integrations/
+│   │   ├── memory/           # Mem0 memory store
+│   │   ├── rag/              # ChromaDB knowledge base
+│   │   └── tools/            # LangChain tools (plan, ticket load, sentiment)
 │   ├── repositories/         # SQLite data access
 │   ├── schemas/              # Pydantic request/response models
 │   └── services/             # Business logic (copilot, drafts, knowledge)
@@ -167,6 +171,13 @@ uv run pytest tests/test_simple.py -v  # single file, verbose
 │   ├── knowledge_base_guide.md  # How to extend and manage the knowledge base
 │   └── EC2_deployment_flow.md   # AWS EC2 + GitHub Actions CI/CD guide
 └── tests/
+    ├── conftest.py               # shared fixtures (isolated DB, TestClient)
+    ├── test_health.py
+    ├── test_tickets_api.py
+    ├── test_drafts_api.py
+    ├── test_knowledge_service.py
+    ├── test_customers_repository.py
+    ├── test_support_tools.py
     └── test_simple.py
 ```
 
@@ -177,9 +188,9 @@ uv run pytest tests/test_simple.py -v  # single file, verbose
 1. Agent receives ticket subject + description + customer profile.
 2. **Memory search** — Mem0 is queried for prior resolutions for this customer email and their company.
 3. **RAG search** — ChromaDB returns the top-K relevant knowledge-base chunks.
-4. **LangChain agent** builds a system prompt embedding the memory + KB context, then runs with two tools available (`lookup_customer_plan`, `lookup_open_ticket_load`).
+4. **LangChain agent** builds a system prompt embedding the memory + KB context, then runs with three tools available: `lookup_customer_plan`, `lookup_open_ticket_load`, `analyze_ticket_sentiment`.
 5. Agent response is extracted. If empty, a direct LLM fallback call is made; if still empty, a deterministic template is used.
-6. The full `context_used` payload (signals, memory hits, KB hits, tool calls) is stored alongside the draft for transparency.
+6. The full `context_used` payload (signals, memory hits, KB hits, tool calls, errors) is stored alongside the draft for transparency. If memory is unavailable, `errors` will contain a `memory_skipped:` entry and draft generation continues normally.
 7. When the agent **accepts** a draft, the resolution is saved back to Mem0 asynchronously — enriching future drafts for the same customer/company.
 
 ---

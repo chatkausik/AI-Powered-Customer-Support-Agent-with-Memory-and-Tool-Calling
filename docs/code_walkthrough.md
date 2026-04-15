@@ -132,6 +132,8 @@ Single `POST /api/knowledge/ingest` endpoint. Delegates entirely to `KnowledgeSe
 
 Both routes look up the customer by ID first, then pass `email` and `company` to `SupportCopilot` which handles scope resolution.
 
+Both responses include `memory_available: bool` and `memory_note: str | None`. When the Mem0 backend is unavailable, `memory_available` is `false` and `memory_note` explains which environment variable to set — the endpoint still returns 200 with an empty result rather than failing.
+
 #### `routers/health.py`
 
 Returns `{"status": "ok"}` — used by Docker healthcheck and CI/CD pipeline.
@@ -148,8 +150,10 @@ This is the heart of the system. Responsible for all AI operations.
 
 Initialises three components:
 1. `ChatGroq` — LangChain LLM wrapper for Groq API.
-2. `CustomerMemoryStore` — Mem0 memory backend. If initialisation fails (e.g. no embedding provider configured), `self.memory` is set to `None` and `self._memory_error` captures the reason. Draft generation continues without memory — the error is surfaced in `context_used.errors`.
+2. `CustomerMemoryStore` — Mem0 memory backend. If initialisation fails (e.g. no embedding provider configured), `self.memory` is set to `None` and `self._memory_error` captures the reason. Draft generation continues without memory — the error is surfaced in `context_used["errors"]` as a `memory_skipped:` entry.
 3. `KnowledgeBaseService` — ChromaDB RAG client.
+
+**`memory_available` property** — Returns `True` only when `self.memory is not None`. Used by memory API endpoints to set the `memory_available` field in responses.
 
 The LangChain agent is built with `create_agent()` using `InMemorySaver` as the checkpointer. Each ticket gets its own thread ID (`ticket::{ticket_id}`) so multi-turn agent state is scoped per ticket.
 
@@ -261,6 +265,26 @@ LangChain tools decorated with `@tool`. The docstring of each tool is the descri
 
 Both tools return structured JSON strings (not Python dicts) because LangChain tool outputs must be strings. The `_json()` helper handles serialisation.
 
+`get_support_tools()` returns all registered tools. Currently: `[lookup_customer_plan, lookup_open_ticket_load, analyze_ticket_sentiment]`.
+
+---
+
+### `integrations/tools/sentiment_tools.py`
+
+Implements `analyze_ticket_sentiment(subject, description)` — a `@tool` that the agent calls to understand the emotional tone of a ticket before composing a reply.
+
+**Analysis approach:** Pure keyword/rule matching across three tiers:
+
+| Tier | Examples | Result |
+|---|---|---|
+| High-escalation patterns | `charged \d+ times`, `nobody.*help`, `refund`, `lawsuit`, `cancel account` | `escalation_risk: "high"` |
+| Negative patterns | `not working`, `error`, `broken`, `frustrated`, `urgent` | `escalation_risk: "medium"/"low-medium"` |
+| Positive/neutral patterns | `thank`, `checking`, `just wondering`, `limits` | `escalation_risk: "low"` |
+
+Returns a JSON string with `sentiment`, `confidence`, `escalation_risk`, `summary`, and `recommended_action`.
+
+**Caching:** The inner `_analyze(subject, description)` function is wrapped with `@functools.lru_cache(maxsize=512)`. Repeated calls with identical inputs return cached results without re-running the regex engine.
+
 ---
 
 ## `customer_support_agent/repositories/sqlite/`
@@ -274,6 +298,8 @@ Both tools return structured JSON strings (not Python dicts) because LangChain t
 ### `customers.py` — `CustomersRepository`
 
 `create_or_get()` implements an upsert pattern: if the customer exists, it backfills missing `name`/`company` fields (without overwriting existing values). This means a customer record is enriched over time as new tickets arrive with more detail.
+
+`get_by_email()` looks up a customer by email address (`WHERE email = ?`). Note: an earlier version of this method had a bug where it queried `WHERE id = ?` with an email string, causing it to always return `None`. This was caught by `test_get_by_email_returns_correct_customer` in the test suite.
 
 ### `tickets.py` — `TicketsRepository`
 
@@ -299,6 +325,39 @@ Pydantic v2 models for all API request and response bodies.
 
 ---
 
-## `tests/test_simple.py`
+## `tests/`
 
-Uses FastAPI's `TestClient` with a `tmp_path`-based settings object to isolate the SQLite database and ChromaDB directories from the real `data/` folder. The test creates the app via `create_app(settings=settings)` so the lifespan (`init_db`) runs correctly inside the `with TestClient(app)` context manager.
+The test suite has 34 tests across 7 files, all isolated from real data and external APIs.
+
+### `conftest.py`
+
+Shared pytest fixtures used across the entire suite:
+
+- **`test_settings(tmp_path)`** — Creates a `Settings` object pointing at a temp directory with all API keys blank. Each test gets its own `tmp_path` (pytest built-in), so tests never share state.
+- **`patched_db(test_settings)`** — Patches `base.get_settings` at the module level so all `connect()` calls inside repositories use the temp SQLite file. Calls `init_db()` to create the schema before yielding.
+- **`api_client(test_settings)`** — Applies the same `base.get_settings` patch, then creates the FastAPI app and a `TestClient`. The app's lifespan (which calls `init_db()`) runs inside the patch, so the API and repositories all share the same isolated DB.
+- **`_clear_copilot_cache()` (autouse)** — Calls `get_copilot.cache_clear()` before and after every test. Without this, `@lru_cache` on `get_copilot()` would let one test's copilot instance bleed into another.
+
+### `test_health.py`
+
+Basic smoke tests for `GET /health`.
+
+### `test_tickets_api.py`
+
+Covers create, list, get-by-id, 404 for unknown id, and customer deduplication across two tickets from the same email. All ticket tests use `auto_generate=False` to avoid triggering LLM calls.
+
+### `test_drafts_api.py`
+
+Seeds data directly via repositories (bypassing the API) to pre-create customers, tickets, and drafts, then exercises `GET /api/drafts/{ticket_id}` and `PATCH /api/drafts/{draft_id}` for content updates and status transitions.
+
+### `test_knowledge_service.py`
+
+Tests `KnowledgeBaseService` in isolation. Uses `_FakeEmbeddingFunction` — a deterministic hash-based embedding function that satisfies ChromaDB's interface (`name()`, `embed_query()`, `embed_documents()`) without downloading any model. Covers empty-collection search, ingestion, file-type filtering, and `clear_existing` rebuild.
+
+### `test_customers_repository.py`
+
+Seven tests covering the full `CustomersRepository` interface. Includes a regression test (`test_get_by_email_returns_correct_customer`) that would catch the `WHERE id = ?` vs `WHERE email = ?` bug.
+
+### `test_support_tools.py`
+
+Nine tests covering all three LangChain tools. No LLM is called — `lookup_customer_plan` and `analyze_ticket_sentiment` are deterministic, and `lookup_open_ticket_load` uses the patched SQLite DB. Verifies JSON structure, determinism, load band calculation, and sentiment tier correctness.

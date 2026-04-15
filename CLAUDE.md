@@ -26,11 +26,14 @@ uv run uvicorn main:app --reload --port 8000
 # Run the Streamlit dashboard (http://localhost:8501)
 uv run streamlit run app.py
 
-# Run tests
+# Run tests (34 tests)
 uv run pytest
 
-# Run a single test
-uv run pytest tests/test_simple.py::test_health_endpoint_returns_ok -v
+# Run with coverage (≥50% enforced)
+uv run pytest --cov
+
+# Run a single test file
+uv run pytest tests/test_support_tools.py -v
 
 # Docker (API + dashboard together)
 docker compose up --build
@@ -64,7 +67,9 @@ customer_support_agent/
   integrations/
     memory/mem0_store.py → Mem0-backed memory store (ChromaDB vector store)
     rag/chroma_kb.py     → ChromaDB RAG: ingest .md/.txt files, semantic search
-    tools/support_tools.py → LangChain tools: lookup_customer_plan, lookup_open_ticket_load
+    tools/support_tools.py   → LangChain tool registry: get_support_tools()
+    tools/sentiment_tools.py → analyze_ticket_sentiment tool (keyword-based, lru_cache)
+    tools/support_tools.py   → lookup_customer_plan, lookup_open_ticket_load
   repositories/sqlite/ → SQLite access for customers, tickets, drafts
   schemas/api.py       → Pydantic request/response models
 knowledge_base/        → .md files ingested into ChromaDB RAG
@@ -91,9 +96,18 @@ When accepting a draft, `save_accepted_resolution()` writes to both scopes so fu
 
 Add `.md` or `.txt` files to `knowledge_base/`. Trigger ingestion via the Streamlit sidebar ("Ingest Knowledge Base") or `POST /api/knowledge/ingest`. The ChromaDB collection name is `support_kb_gemini` when `GOOGLE_API_KEY` is set, `support_kb` otherwise — switching embedding providers requires clearing the old collection.
 
-### LangChain tools (support_tools.py)
+### LangChain tools
 
-- `lookup_customer_plan`: deterministic hash on email → returns plan tier + SLA hours (no real billing system)
-- `lookup_open_ticket_load`: queries SQLite for real open ticket count
+- `lookup_customer_plan` — deterministic hash on email → plan tier + SLA hours (no real billing system)
+- `lookup_open_ticket_load` — queries SQLite for real open ticket count
+- `analyze_ticket_sentiment` — keyword-based sentiment analysis; returns sentiment, confidence, escalation_risk, summary, recommended_action; results cached via `@lru_cache`
 
-To add a new tool, implement it with `@tool` decorator and register it in `get_support_tools()`.
+All three are registered in `get_support_tools()`. To add a new tool, implement it with `@tool` and register it there.
+
+### Memory resilience
+
+`SupportCopilot` degrades gracefully when Mem0 is unavailable:
+- `memory_available` property → `True` only when Mem0 initialised without error
+- `_search_memory_scopes`, `list_customer_memories`, `save_accepted_resolution` all catch runtime exceptions per-scope and continue
+- `context_used["errors"]` contains a `memory_skipped:` entry when memory was skipped
+- Memory API endpoints (`/memories`, `/memory-search`) include `memory_available` and `memory_note` fields in their responses
