@@ -140,14 +140,9 @@ jobs:
           fi
 
           if ! command -v docker >/dev/null 2>&1; then
-            echo "Docker not found. Installing Docker..."
-            if command -v apt-get >/dev/null 2>&1; then
-              sudo apt-get update
-              sudo apt-get install -y docker.io docker-compose-plugin
-            else
-              echo "ERROR: Unsupported package manager; install Docker manually."
-              exit 1
-            fi
+            echo "Docker not found. Installing Docker via official script..."
+            curl -fsSL https://get.docker.com | sudo sh
+            sudo usermod -aG docker "$USER" || true
           fi
 
           sudo systemctl enable --now docker || true
