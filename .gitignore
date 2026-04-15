@@ -1,0 +1,30 @@
+# Environment
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Runtime data
+data/support.db
+data/chroma_rag/
+data/chroma_mem0/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Build / dist
+dist/
+build/
+*.egg-info/
