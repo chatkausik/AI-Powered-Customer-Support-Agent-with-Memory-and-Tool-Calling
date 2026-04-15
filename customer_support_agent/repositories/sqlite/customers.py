@@ -42,7 +42,7 @@ class CustomersRepository:
             row = conn.execute("SELECT * FROM customers WHERE id = ?", (customer_id,)).fetchone()
             return row_to_dict(row)
 
-    def get_by_email(self, email:str)-> dict[str,Any] | None:
+    def get_by_email(self, email: str) -> dict[str, Any] | None:
         with connect() as conn:
-            row = conn.execute("SELECT * FROM customers WHERE id = ?", (email,)).fetchone()
+            row = conn.execute("SELECT * FROM customers WHERE email = ?", (email,)).fetchone()
             return row_to_dict(row)

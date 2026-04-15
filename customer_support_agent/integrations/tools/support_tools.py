@@ -8,6 +8,7 @@ from langchain_core.tools import tool
 
 from customer_support_agent.repositories.sqlite.customers import CustomersRepository
 from customer_support_agent.repositories.sqlite.tickets import TicketsRepository
+from customer_support_agent.integrations.tools.sentiment_tools import analyze_ticket_sentiment
 
 
 def _stable_bucket(email: str, size: int) -> int:
@@ -93,6 +94,6 @@ def lookup_open_ticket_load(customer_email: str) -> str:
     )
 
 def get_support_tools() -> list:
-    return [lookup_customer_plan, lookup_open_ticket_load]
+    return [lookup_customer_plan, lookup_open_ticket_load, analyze_ticket_sentiment]
 
 

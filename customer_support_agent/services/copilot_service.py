@@ -44,8 +44,13 @@ class SupportCopilot:
         try:
             self.memory = CustomerMemoryStore(settings=settings, llm=self._llm)
         except Exception as exc:
-            self._memory_error = str(exc)
+            self._memory_error = f"Memory init failed: {exc}"
         self.rag = KnowledgeBaseService(settings=settings)
+
+    @property
+    def memory_available(self) -> bool:
+        """True when the memory backend initialised without error."""
+        return self.memory is not None
 
     
     def generate_draft(self, ticket: dict[str, Any], customer: dict[str, Any]) -> dict[str, Any]:
@@ -100,7 +105,9 @@ class SupportCopilot:
             tool_calls=tool_calls,
         )
         if self._memory_error:
-            context_used.setdefault("errors", []).append(f"Memory disabled: {self._memory_error}")
+            context_used.setdefault("errors", []).append(
+                f"memory_skipped: {self._memory_error}"
+            )
         if used_fallback:
             context_used.setdefault("errors", []).append(
                 "Primary tool-call response had empty content; fallback synthesis was used."
@@ -133,13 +140,16 @@ class SupportCopilot:
             customer_email=customer_email,
             customer_company=customer_company,
         ):
-            self.memory.add_resolution(
-                user_id=scope_user_id,
-                ticket_subject=ticket_subject,
-                ticket_description=ticket_description,
-                accepted_draft=draft_content,
-                entity_links=entity_links,
-            )
+            try:
+                self.memory.add_resolution(
+                    user_id=scope_user_id,
+                    ticket_subject=ticket_subject,
+                    ticket_description=ticket_description,
+                    accepted_draft=draft_content,
+                    entity_links=entity_links,
+                )
+            except Exception as exc:
+                self._memory_error = f"Memory save failed for scope '{scope_user_id}': {exc}"
 
     def list_customer_memories(
         self,
@@ -155,7 +165,11 @@ class SupportCopilot:
         )
         raw_hits: list[dict[str, Any]] = []
         for scope_user_id in scope_user_ids:
-            hits = self.memory.list_memories(user_id=scope_user_id, limit=max(1, limit))
+            try:
+                hits = self.memory.list_memories(user_id=scope_user_id, limit=max(1, limit))
+            except Exception as exc:
+                self._memory_error = f"Memory list failed for scope '{scope_user_id}': {exc}"
+                continue
             raw_hits.extend(self._annotate_memory_scope(hits=hits, scope_user_id=scope_user_id))
         return self._dedupe_memory_hits(raw_hits, limit=max(1, limit))
 
@@ -190,7 +204,11 @@ class SupportCopilot:
         )
         raw_hits: list[dict[str, Any]] = []
         for scope_user_id in scope_user_ids:
-            hits = self.memory.search(query=query, user_id=scope_user_id, limit=per_scope_limit)
+            try:
+                hits = self.memory.search(query=query, user_id=scope_user_id, limit=per_scope_limit)
+            except Exception as exc:
+                self._memory_error = f"Memory search failed for scope '{scope_user_id}': {exc}"
+                continue
             raw_hits.extend(self._annotate_memory_scope(hits=hits, scope_user_id=scope_user_id))
         return self._dedupe_memory_hits(raw_hits, limit=per_scope_limit * len(scope_user_ids))
     

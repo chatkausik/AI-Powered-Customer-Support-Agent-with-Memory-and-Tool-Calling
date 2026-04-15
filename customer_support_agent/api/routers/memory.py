@@ -15,6 +15,12 @@ from customer_support_agent.services.copilot_service import SupportCopilot
 router = APIRouter()
 
 
+_MEMORY_UNAVAILABLE_NOTE = (
+    "Memory backend is unavailable (no embedding provider configured or initialisation failed). "
+    "Results are empty. Set GOOGLE_API_KEY, OPENAI_API_KEY, or ENABLE_LOCAL_EMBEDDINGS=true to enable."
+)
+
+
 @router.get("/api/customers/{customer_id}/memories", response_model=CustomerMemoriesResponse)
 def customer_memories_route(
     customer_id: int,
@@ -33,11 +39,15 @@ def customer_memories_route(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load memories: {exc}") from exc
 
+    memory_available = copilot.memory_available
     return {
         "customer_id": customer_id,
         "customer_email": customer["email"],
         "memories": memories,
+        "memory_available": memory_available,
+        "memory_note": None if memory_available else _MEMORY_UNAVAILABLE_NOTE,
     }
+
 
 @router.get("/api/customers/{customer_id}/memory-search", response_model=CustomerMemorySearchResponse)
 def customer_memory_search_route(
@@ -63,9 +73,12 @@ def customer_memory_search_route(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to search memories: {exc}") from exc
 
+    memory_available = copilot.memory_available
     return {
         "customer_id": customer_id,
         "customer_email": customer["email"],
         "query": query,
         "results": results,
+        "memory_available": memory_available,
+        "memory_note": None if memory_available else _MEMORY_UNAVAILABLE_NOTE,
     }

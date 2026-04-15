@@ -40,4 +40,18 @@ package = false
 dev = [
   "playwright>=1.58.0",
   "pytest",
+  "pytest-cov",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["customer_support_agent"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+fail_under = 50
+show_missing = true

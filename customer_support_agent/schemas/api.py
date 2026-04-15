@@ -91,7 +91,8 @@ class CustomerMemoriesResponse(BaseModel):
     customer_id: int
     customer_email: EmailStr
     memories: list[dict[str, Any]]
-
+    memory_available: bool = True
+    memory_note: str | None = None
 
 
 class CustomerMemorySearchResponse(BaseModel):
@@ -99,3 +100,5 @@ class CustomerMemorySearchResponse(BaseModel):
     customer_email: EmailStr
     query: str
     results: list[dict[str, Any]]
+    memory_available: bool = True
+    memory_note: str | None = None
